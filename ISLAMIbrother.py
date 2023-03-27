@@ -5,17 +5,6 @@ from urllib import response
 from bs4 import BeautifulSoup
 import requests
 
-from telegram import __version__ as TG_VER
-
-try:
-    from telegram import __version_info__
-except ImportError:
-    __version_info__ = (0, 0, 0, 0, 0)  # type: ignore[assignment]
-
-if __version_info__ < (20, 0, 0, "alpha", 1):
-    raise RuntimeError(
-        f"This bot is not compatible with your current PTB version {TG_VER}"
-    )
 
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
@@ -31,16 +20,26 @@ import plotly.graph_objects as go
 from datetime import datetime
 import hashlib
 import hmac
+from num2words import num2words
 # End of Imports
 
 # //////////////////////////////////////////\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ #
 
 # Web3 and bot token connection
-bot = telegram.Bot(token="xxx")
+botToken = "xxx"
+ISLAMIbrother = telegram.Bot(token= botToken)
 
-chat_id = "-xx"
+chat_id = "-xxx"
 
 w3 = Web3(Web3.HTTPProvider("xxx"))
+
+dead_wallet = '0x000000000000000000000000000000000000dEaD'
+
+with open("ERC20ABI.json") as f:
+    token_contract_abi = json.load(f)
+
+ISLAMI_contract_address = '0x9c891326Fd8b1a713974f73bb604677E1E63396D'
+ISLAMI_contract = w3.eth.contract(address=ISLAMI_contract_address, abi=token_contract_abi)
 
 with open("ramadanABI.json") as f:
     ramadan_contract_abi = json.load(f)
@@ -74,11 +73,11 @@ def load_events_data():
     except FileNotFoundError:
         return []
 
-def fetch_player_data(address, old_contract):
+def fetch_player_data(address, ramadan_contract):
     for player_data in events_data:
         if player_data['address'] == address:
             # Update the existing player's score and block number
-            player = old_contract.functions.players(address).call()
+            player = ramadan_contract.functions.players(address).call()
             player_data['score'] = player[0]
             player_data['daysPlayed'] = player[3]
             player_data['blockNumber'] = w3.eth.block_number
@@ -86,7 +85,7 @@ def fetch_player_data(address, old_contract):
             break
     else:
         # Create a new dictionary for a new player and append it to events_data
-        player = old_contract.functions.players(address).call()
+        player = ramadan_contract.functions.players(address).call()
         player_data = OrderedDict([("address", address), ("score", player[0]), ("daysPlayed", player[3]), ("blockNumber", w3.eth.block_number)])
         print(f"Fetched player data: {player_data}")
         events_data.append(player_data)
@@ -154,12 +153,23 @@ def unicode_bold(text):
 def unicode_italic(text):
     return f"_{text}_"
 
+async def ramadan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    for address in player_addresses:
+        player_data = fetch_player_data(address, ramadan_contract)
+        update_top_50_players(player_data)
+    message = unicode_bold("🏆 Top 50 Players Ramadan Competition 🏆") + "\n\n"    
+    for i, player_data in enumerate(top_50_players):
+          message += unicode_bold(f"{i + 1}. {player_data['address']}") + f" - {unicode_bold('Score')}: {unicode_italic(player_data['score'])} - {unicode_bold('Days Played')}: {unicode_italic(player_data['daysPlayed'])}\n"    
+    await update.message.reply_text(message)
+
 async def send_top_50_players_to_telegram(chat_id):
       message = unicode_bold("🏆 Top 50 Players Ramadan Competition 🏆") + "\n\n"
       for i, player_data in enumerate(top_50_players):
           message += unicode_bold(f"{i + 1}. {player_data['address']}") + f" - {unicode_bold('Score')}: {unicode_italic(player_data['score'])} - {unicode_bold('Days Played')}: {unicode_italic(player_data['daysPlayed'])}\n"
-      await bot.send_message(chat_id=chat_id, text=message, parse_mode="MARKDOWN")
+      await ISLAMIbrother.send_message(chat_id=chat_id, text=message, parse_mode="MARKDOWN")
 
+
+    
 async def update_top_players():
     global top_50_players
     global events_data
@@ -425,22 +435,60 @@ async def chart(update, context):
     else:
         await update.message.reply_text(text='Error retrieving price data.')
 
-def priceChart() -> None:
-    """Start the bot."""
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token("xx").build()
-    application.add_handler(CommandHandler("islami", islami))
-    application.add_handler(CommandHandler("ihelp", ihelp))
-    application.add_handler(CommandHandler("price", price))
-    application.add_handler(CommandHandler("chart", chart))
-    # application.add_handler(CallbackQueryHandler(button_callback))
-    # Run the bot until the user presses Ctrl-C
-    application.run_polling()        
 # End of Price and Chart
+
+# //////////////////////////////////////////\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\ #
 
 # P2P smart contract notification
 latest_block = w3.eth.block_number
 p2p_event_filter = p2p_contract.events.orderCreated.get_logs(fromBlock= latest_block)
+
+def get_p2p_orders(p2p_contract):
+    # Get all P2P orders from the smart contract
+    orders = p2p_contract.functions.getOrders().call()
+
+    # Organize the orders into a message
+    message = "P2P Orders:\n"
+    for order in orders:
+        type_message = "🔥Sell🔥" if order[0] == 1 else "💰Buy💰"
+        currency = "USDT" if order[3] == "0xc2132D05D31c914a87C6611C10748AEb04B58e8F" else "USDC"
+        message += f"Type: {type_message}\n"
+        # message += f"Order ID: {order[0]}\n"
+        message += f"Seller: {order[2]}\n"
+        message += f"💰 Amount: {order[4]/ 10**7}  ISLAMI\n"
+        message += f"💰 Price: {order[5]/ 10**6:.6f} {currency} \n\n"
+        
+
+    return message
+
+async def burned(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Define the icons
+    icon_before = "🔥"
+    icon_after = "🔥"   
+    islami_balance = ISLAMI_contract.functions.balanceOf(dead_wallet).call()
+    readable_number = islami_balance / 10**7
+    
+    # Format the readable number with commas and decimal places
+    formatted_number = f"{readable_number:,.7f}"
+    
+    # Convert the readable number to text
+    if readable_number < 100000000000:
+        number_text = num2words(readable_number)
+    else:
+        number_text = "Number too large to convert to words"
+    
+    message = f"{icon_before} {formatted_number} {icon_after}\n{number_text}"
+    
+    # Send the message to the Telegram chat
+    await update.message.reply_text(message)
+
+
+
+async def send_p2p_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Get the P2P orders message
+    message = get_p2p_orders(p2p_contract)
+    # Send the message to the Telegram chat
+    await update.message.reply_text(message)
 
 async def p2p_send_notifications():
 #await get_chat_id()
@@ -458,7 +506,7 @@ async def p2p_send_notifications():
             message += f"Type: {type_message}\n"
             message += f"💰 Amount: {order['Amount']/ 10**7}  ISLAMI\n"
             message += f"💰 Price: {order['Price']/ 10**6:.6f} {currency} \n"
-            await bot.send_message(chat_id=chat_id, text=message)
+            await ISLAMIbrother.send_message(chat_id=chat_id, text=message)
 
 
         # Sleep for some time
@@ -466,8 +514,31 @@ async def p2p_send_notifications():
 
 # End of P2P
 
+# Main
+
+def main() -> None:
+    """Start the bot."""
+    # Create the Application and pass it your bot's token.
+    application = Application.builder().token(botToken).build()
+    application.add_handler(CommandHandler("islami", islami))
+    application.add_handler(CommandHandler("ihelp", ihelp))
+    application.add_handler(CommandHandler("price", price))
+    application.add_handler(CommandHandler("chart", chart))
+    application.add_handler(CommandHandler("p2p", send_p2p_orders))
+    application.add_handler(CommandHandler("burned", burned))
+    application.add_handler(CommandHandler("ramadan", ramadan))
+    application.add_handler(CommandHandler("update", fetch_player_data(address, ramadan_contract)))
+    # application.add_handler(CallbackQueryHandler(button_callback))
+    # Run the bot until the user presses Ctrl-C
+    application.run_polling() 
+    asyncio.run(update_top_players())  
+    asyncio.run(p2p_send_notifications()) 
+
+# End Main
+
 if __name__ == "__main__":
-   priceChart()
-   asyncio.run(update_top_players())  
-   asyncio.run(p2p_send_notifications())      
+   main()
+#    asyncio.run(update_top_players())  
+#    asyncio.run(p2p_send_notifications())      
     
+
